@@ -1,0 +1,275 @@
+{
+  "name": "Master Router - AI Sales Dispatch",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "trigger-dispatch",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "fb20fcbe-889a-4b90-a775-31e56cff2ea0",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [-400, 0],
+      "webhookId": "dispatch-webhook-12345"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ ($json.body.mode || '').toLowerCase() === 'auto' ? true : false }}",
+              "value2": true
+            }
+          ]
+        }
+      },
+      "id": "9b68cdb3-c215-43f1-a0e4-8e2dae618438",
+      "name": "Is Auto Mode?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [-192, 0]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://n8n:5678/webhook/lala-auto",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ $json.body || {} }}",
+        "options": {}
+      },
+      "id": "call-auto-workflow-001",
+      "name": "Call Auto Workflow",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [32, -128]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://n8n:5678/webhook/manual-phase1",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ $json.body || {} }}",
+        "options": {}
+      },
+      "id": "call-manual-workflow-001",
+      "name": "Call Manual Workflow",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [32, 128]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ $json }}",
+        "options": {}
+      },
+      "id": "respond-auto-master-001",
+      "name": "Respond Auto",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [240, -128]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ $json }}",
+        "options": {}
+      },
+      "id": "respond-manual-master-001",
+      "name": "Respond Manual",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [240, 128]
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "check-status",
+        "responseMode": "lastNode",
+        "options": {}
+      },
+      "id": "1d2409cb-d8de-4306-8c18-941b207875a7",
+      "name": "Check Status Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [-400, 320],
+      "webhookId": "status-webhook-12345"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT CASE WHEN sales_channel = 'outbound_sent' THEN true ELSE false END as is_completed FROM glid_data WHERE glid = '{{ $json.body.glid }}'",
+        "options": {}
+      },
+      "id": "19791d3f-ab8e-4b10-ba0c-953fe6887544",
+      "name": "Check Status DB",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [-192, 320],
+      "credentials": {
+        "postgres": {
+          "id": "2I0cCB2K4X2XhaK2",
+          "name": "Postgres account 3"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "path": "dashboard-data",
+        "responseMode": "lastNode",
+        "options": {}
+      },
+      "id": "49df41b3-b21b-418e-9d34-12d9118ee6a8",
+      "name": "Dashboard Data Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [-400, 496],
+      "webhookId": "data-webhook-12345"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT (SELECT COALESCE(json_agg(row_to_json(next10)), '[]'::json) FROM (SELECT glid, company_name, mobile, email FROM glid_data WHERE mobile IS NOT NULL AND mobile != '' AND (last_contacted IS NULL OR last_contacted < NOW() - INTERVAL '6 hours') AND sales_channel IS DISTINCT FROM 'processing' ORDER BY id ASC LIMIT {{ $json.query.limit || 10 }}) next10) as next_queue, (SELECT COALESCE(json_agg(row_to_json(history10)), '[]'::json) FROM (SELECT g.glid, g.company_name, p.preferred_mode as mode, g.last_contacted, g.mobile as phone_number, g.contact_person_name as person_name, g.city as location FROM glid_data g LEFT JOIN glid_preferences p ON g.glid = p.glid WHERE g.sales_channel IN ('outbound_sent', 'processing') ORDER BY g.last_contacted DESC LIMIT 10) history10) as contacted_history;",
+        "options": {}
+      },
+      "id": "06985720-3a22-4140-a002-57d4e052b7fc",
+      "name": "Dashboard Data DB",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [-192, 496],
+      "credentials": {
+        "postgres": {
+          "id": "2I0cCB2K4X2XhaK2",
+          "name": "Postgres account 3"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "path": "seller-details",
+        "responseMode": "lastNode",
+        "options": {}
+      },
+      "id": "c5ba16a7-5fb7-40b3-bcdf-a32f038a1d25",
+      "name": "Seller Details Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [-400, 672],
+      "webhookId": "details-webhook-12345"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT COALESCE(c.phone_number, g.mobile) as phone_number, c.message_text as transcript, c.summary, c.sentiment, c.created_at, c.channel, g.contact_person_name as person_name, g.city as location FROM glid_data g LEFT JOIN glid_conversations c ON TRIM(g.glid::text) = c.glid::text WHERE TRIM(g.glid::text) = '{{ $json.query.glid }}' ORDER BY c.created_at DESC NULLS LAST LIMIT 3",
+        "options": {}
+      },
+      "id": "c619c9d1-55b1-45dc-aa54-60c4c570b434",
+      "name": "Seller Details DB",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [-192, 672],
+      "credentials": {
+        "postgres": {
+          "id": "2I0cCB2K4X2XhaK2",
+          "name": "Postgres account 3"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Is Auto Mode?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Is Auto Mode?": {
+      "main": [
+        [
+          {
+            "node": "Call Auto Workflow",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Call Manual Workflow",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Call Auto Workflow": {
+      "main": [
+        [
+          {
+            "node": "Respond Auto",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Call Manual Workflow": {
+      "main": [
+        [
+          {
+            "node": "Respond Manual",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Status Webhook": {
+      "main": [
+        [
+          {
+            "node": "Check Status DB",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Dashboard Data Webhook": {
+      "main": [
+        [
+          {
+            "node": "Dashboard Data DB",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Seller Details Webhook": {
+      "main": [
+        [
+          {
+            "node": "Seller Details DB",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "b3a8e0e1f9ab1bfe3a36f231f676f78bb30a519d2b21e6c530c0eee8ebb4a5d0"
+  }
+}

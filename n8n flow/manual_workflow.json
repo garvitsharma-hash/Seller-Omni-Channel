@@ -1,0 +1,1311 @@
+{
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "manual-phase1",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "95a6d360-e2ea-46ab-be75-44a6220a2e54",
+      "name": "Webhook Phase 1",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [
+        -4896,
+        -640
+      ],
+      "webhookId": "manual-phase1-webhook-001"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE glid_data \nSET last_contacted = CURRENT_TIMESTAMP, sales_channel = 'processing'\nWHERE id = (\n  SELECT id FROM glid_data \n  WHERE mobile IS NOT NULL \n  AND mobile != '' \n  AND (last_contacted IS NULL OR last_contacted < NOW() - INTERVAL '6 hours') \n  ORDER BY id ASC\n  LIMIT 1 \n  FOR UPDATE SKIP LOCKED\n) \nRETURNING *;",
+        "options": {}
+      },
+      "id": "dc1bcfd1-7056-4ee5-87ba-1ebab049f603",
+      "name": "Fetch 1 GLID",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        -4592,
+        -640
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "2I0cCB2K4X2XhaK2",
+          "name": "Postgres account 3"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ $json.glid ? true : false }}",
+              "value2": true
+            }
+          ]
+        }
+      },
+      "id": "78546891-7042-46bf-b2eb-3951b7d49618",
+      "name": "Check if GLID found",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [
+        -4288,
+        -640
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={\"status\":\"completed\",\"message\":\"No more sellers to process!\"}",
+        "options": {}
+      },
+      "id": "b7170561-faba-4360-8b5c-288314b3b36a",
+      "name": "Respond Empty",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        -4288,
+        -336
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT COALESCE(json_agg(c), '[]'::json) as recent_history FROM (SELECT message_text, direction, channel, created_at, summary, sentiment FROM glid_conversations WHERE glid = '{{ $json.glid }}' ORDER BY created_at DESC LIMIT 5) c;",
+        "options": {}
+      },
+      "id": "0a88f7c5-bfab-4ffa-a7c8-5e6df7415829",
+      "name": "Fetch Past Conversations",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        -3984,
+        -640
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "2I0cCB2K4X2XhaK2",
+          "name": "Postgres account 3"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=Current Date & Time: {{ $now }}\n\nYou are a sales routing agent. Based on this lead profile and conversation history, decide the best outreach channel.\n\nLead Profile:\n- Company: {{ $('Fetch 1 GLID').first().json.company_name }}\n- Contact: {{ $('Fetch 1 GLID').first().json.contact_person_name }}\n- Industry: {{ $('Fetch 1 GLID').first().json.industry_category }}\n- City: {{ $('Fetch 1 GLID').first().json.city }}\n- Mobile: {{ $('Fetch 1 GLID').first().json.mobile }}\n- Email: {{ $('Fetch 1 GLID').first().json.email }}\n- Prime Status: {{ $('Fetch 1 GLID').first().json.prime_status }}\n- Enquiries 90D: {{ $('Fetch 1 GLID').first().json.enquiries_90d }}\n- Profile Score: {{ $('Fetch 1 GLID').first().json.profile_score }}\n\nRecent Conversation History:\n{{ JSON.stringify($json.recent_history, null, 2) }}\n\nRules:\n- If no prior contact: prefer voicebot\n- If WhatsApp history exists and lead was responsive: prefer whatsapp_bot\n- If email requested or lead is premium: prefer gmail\n- If mobile unavailable: use gmail\n\nRespond with ONLY valid JSON:\n{\"channel\": \"voicebot|whatsapp_bot|gmail\", \"reasoning\": \"one sentence explanation\"}"
+      },
+      "id": "c48cea77-6345-4336-abad-6b3e1d1da102",
+      "name": "Classify Conversation Mode",
+      "type": "@n8n/n8n-nodes-langchain.chainLlm",
+      "typeVersion": 1.4,
+      "position": [
+        -3696,
+        -640
+      ]
+    },
+    {
+      "parameters": {
+        "model": {
+          "__rl": true,
+          "value": "openai/gpt-4o-mini",
+          "mode": "list"
+        },
+        "builtInTools": {},
+        "options": {}
+      },
+      "id": "d19fc267-e33b-4641-b3f0-0be887a899bf",
+      "name": "OpenAI Chat Model Classifier",
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1.3,
+      "position": [
+        -3696,
+        -448
+      ],
+      "credentials": {
+        "openAiApi": {
+          "id": "O0szAJGMtGNeoYkg",
+          "name": "OpenAI account 3"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const text = ($json.text || '').trim();\nlet channel = 'voicebot';\nlet reasoning = 'Auto-classified based on lead profile.';\ntry {\n  const parsed = JSON.parse(text);\n  channel = ((parsed.channel || 'voicebot') + '').toLowerCase().trim();\n  reasoning = parsed.reasoning || reasoning;\n} catch (e) {\n  if (text.toLowerCase().includes('whatsapp')) channel = 'whatsapp_bot';\n  else if (text.toLowerCase().includes('gmail') || text.toLowerCase().includes('email')) channel = 'gmail';\n  else channel = 'voicebot';\n}\n\n// Test GLID channel overrides\nconst testOverrides = { '34432': 'voicebot', '1162370': 'gmail' };\nconst glid = ($('Fetch 1 GLID').first().json.glid || '').toString().trim();\nif (testOverrides[glid]) {\n  channel = testOverrides[glid];\n  reasoning = `TEST OVERRIDE: Forced to ${testOverrides[glid]} for testing`;\n}\n\nreturn [{ json: { channel, reasoning } }];"
+      },
+      "id": "b986b9ac-f641-4b09-8d68-1ae2a8d91d94",
+      "name": "Parse Classifier Output",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -3392,
+        -640
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO glid_preferences (glid, preferred_mode, updated_at) VALUES ('{{ $('Fetch 1 GLID').first().json.glid }}', '{{ $json.channel }}', CURRENT_TIMESTAMP) ON CONFLICT (glid) DO UPDATE SET preferred_mode = EXCLUDED.preferred_mode, updated_at = CURRENT_TIMESTAMP;",
+        "options": {}
+      },
+      "id": "9e1d7d50-45db-4958-a308-c0454e192ed2",
+      "name": "Save Preferred Mode",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        -3088,
+        -640
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "2I0cCB2K4X2XhaK2",
+          "name": "Postgres account 3"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "dataType": "string",
+        "value1": "={{ $('Parse Classifier Output').item.json.channel }}",
+        "rules": {
+          "rules": [
+            {
+              "value2": "voicebot"
+            },
+            {
+              "value2": "whatsapp_bot",
+              "output": 1
+            },
+            {
+              "value2": "gmail",
+              "output": 2
+            }
+          ]
+        },
+        "fallbackOutput": 0
+      },
+      "id": "f8cc29c0-48b0-45dd-a75c-6857948299f9",
+      "name": "Switch on Channel",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 1,
+      "position": [
+        -2784,
+        -640
+      ]
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=Current Server Date & Time: {{ $now }}\n\nYou are a sales assistant. Generate a short, personalized voice call opening pitch (max 2-3 sentences) for this business lead.\n\nLead data:\n- Company: {{ $('Fetch 1 GLID').first().json.company_name }}\n- Contact: {{ $('Fetch 1 GLID').first().json.contact_person_name }}\n- Industry: {{ $('Fetch 1 GLID').first().json.industry_category }}\n- City: {{ $('Fetch 1 GLID').first().json.city }}\n- Nature of Business: {{ $('Fetch 1 GLID').first().json.nature_of_business }}\n- Prime Status: {{ $('Fetch 1 GLID').first().json.prime_status }}\n- Enquiries (90D): {{ $('Fetch 1 GLID').first().json.enquiries_90d }}\n- Meetings (90D): {{ $('Fetch 1 GLID').first().json.meetings_90d }}\n- Previous Meeting: {{ $('Fetch 1 GLID').first().json.meeting_updates_1yr }}\n- Activity on page: {{ $('Fetch 1 GLID').first().json.activity_titles_30d_unique }}\n- Preferred Language: {{ $('Fetch 1 GLID').first().json.preferred_language }}\n\nRecent Conversation History:\n{{ JSON.stringify($('Fetch Past Conversations').item.json.recent_history, null, 2) }}\n\nRules:\n- 2-3 sentences max, conversational for speaking aloud\n- Introduce yourself as from IndiaMart\n- Mention company name\n- Reference key metric as hook\n- End with open question\n- No markdown, plain text\n- Language based on city\n- Use honorifics"
+      },
+      "id": "68e63630-9db0-48ca-8fcf-0756bef44c37",
+      "name": "Generate Sales Pitch Voice",
+      "type": "@n8n/n8n-nodes-langchain.chainLlm",
+      "typeVersion": 1.4,
+      "position": [
+        -2496,
+        -1040
+      ]
+    },
+    {
+      "parameters": {
+        "model": {
+          "__rl": true,
+          "value": "openai/gpt-4o-mini",
+          "mode": "list"
+        },
+        "builtInTools": {},
+        "options": {}
+      },
+      "id": "190ad061-1901-4617-9190-ccc487962100",
+      "name": "OpenAI Chat Model Pitch Voice",
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1.3,
+      "position": [
+        -2496,
+        -848
+      ],
+      "credentials": {
+        "openAiApi": {
+          "id": "O0szAJGMtGNeoYkg",
+          "name": "OpenAI account 3"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "sessionKey": "={{ $('Fetch 1 GLID').first().json.glid }}",
+        "contextWindowLength": 10
+      },
+      "id": "3e5cc80d-4f85-4e4e-bf4e-af437779d6be",
+      "name": "Postgres Chat Memory Voice",
+      "type": "@n8n/n8n-nodes-langchain.memoryPostgresChat",
+      "typeVersion": 1.4,
+      "position": [
+        -2496,
+        -1248
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "2I0cCB2K4X2XhaK2",
+          "name": "Postgres account 3"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=Current Server Date & Time: {{ $now }}\n\nYou are a sales assistant. Generate a short WhatsApp message (1-2 sentences) for this business lead.\n\nLead data:\n- Company: {{ $('Fetch 1 GLID').first().json.company_name }}\n- Contact: {{ $('Fetch 1 GLID').first().json.contact_person_name }}\n- Industry: {{ $('Fetch 1 GLID').first().json.industry_category }}\n- City: {{ $('Fetch 1 GLID').first().json.city }}\n- Prime Status: {{ $('Fetch 1 GLID').first().json.prime_status }}\n- Enquiries (90D): {{ $('Fetch 1 GLID').first().json.enquiries_90d }}\n- Meetings (90D): {{ $('Fetch 1 GLID').first().json.meetings_90d }}\n- Previous Meeting: {{ $('Fetch 1 GLID').first().json.meeting_updates_1yr }}\n- Activity on page: {{ $('Fetch 1 GLID').first().json.activity_titles_30d_unique }}\n- Preferred Language: {{ $('Fetch 1 GLID').first().json.preferred_language }}\n\nRecent Conversation History:\n{{ JSON.stringify($('Fetch Past Conversations').item.json.recent_history, null, 2) }}\n\nRules:\n- Exactly 1-2 short sentences, no paragraphs\n- Mention company name and IndiaMart\n- Reference relevant data point\n- If prior conversation, pick up from it\n- End with a question\n- No markdown, plain text, English script\n- Language based on city\n- Use honorifics"
+      },
+      "id": "5b17c7c4-38ef-40b7-b66e-f9420465b267",
+      "name": "Generate Sales Pitch WA",
+      "type": "@n8n/n8n-nodes-langchain.chainLlm",
+      "typeVersion": 1.4,
+      "position": [
+        -2496,
+        -640
+      ]
+    },
+    {
+      "parameters": {
+        "model": {
+          "__rl": true,
+          "value": "openai/gpt-4o-mini",
+          "mode": "list"
+        },
+        "builtInTools": {},
+        "options": {}
+      },
+      "id": "fb7edf51-785f-488b-abd3-d9c52953d835",
+      "name": "OpenAI Chat Model Pitch WA",
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1.3,
+      "position": [
+        -2496,
+        -448
+      ],
+      "credentials": {
+        "openAiApi": {
+          "id": "O0szAJGMtGNeoYkg",
+          "name": "OpenAI account 3"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "sessionKey": "={{ $('Fetch 1 GLID').first().json.glid }}",
+        "contextWindowLength": 10
+      },
+      "id": "caf3fea8-7f80-4eb0-9b68-f9bca6f416fb",
+      "name": "Postgres Chat Memory WA",
+      "type": "@n8n/n8n-nodes-langchain.memoryPostgresChat",
+      "typeVersion": 1.4,
+      "position": [
+        -2336,
+        -848
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "2I0cCB2K4X2XhaK2",
+          "name": "Postgres account 3"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=You are a sales assistant. Generate a short, personalized email for this business lead.\n\nLead data:\n- Company: {{ $('Fetch 1 GLID').first().json.company_name }}\n- Contact: {{ $('Fetch 1 GLID').first().json.contact_person_name }}\n- Industry: {{ $('Fetch 1 GLID').first().json.industry_category }}\n- City: {{ $('Fetch 1 GLID').first().json.city }}\n- Prime Status: {{ $('Fetch 1 GLID').first().json.prime_status }}\n- Enquiries (90D): {{ $('Fetch 1 GLID').first().json.enquiries_90d }}\n- Meetings (90D): {{ $('Fetch 1 GLID').first().json.meetings_90d }}\n- Previous Meeting: {{ $('Fetch 1 GLID').first().json.meeting_updates_1yr }}\n- Activity on page: {{ $('Fetch 1 GLID').first().json.activity_titles_30d_unique }}\n- Preferred Language: {{ $('Fetch 1 GLID').first().json.preferred_language }}\n\nRules:\n- Friendly, professional, short\n- Mention company name and IndiaMart\n- Reference relevant data point\n- End with question\n- No markdown, plain text\n- Language based on city\n- Use honorifics"
+      },
+      "id": "8e1edaa0-e50c-4368-8036-eb0906e29277",
+      "name": "Generate Sales Pitch Gmail",
+      "type": "@n8n/n8n-nodes-langchain.chainLlm",
+      "typeVersion": 1.4,
+      "position": [
+        -2496,
+        -240
+      ]
+    },
+    {
+      "parameters": {
+        "model": {
+          "__rl": true,
+          "value": "openai/gpt-4o-mini",
+          "mode": "list"
+        },
+        "builtInTools": {},
+        "options": {}
+      },
+      "id": "f1f6ad3a-1196-42c3-8e15-4a6426a3d4f2",
+      "name": "OpenAI Chat Model Pitch Gmail",
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1.3,
+      "position": [
+        -2496,
+        -48
+      ],
+      "credentials": {
+        "openAiApi": {
+          "id": "O0szAJGMtGNeoYkg",
+          "name": "OpenAI account 3"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "sessionKey": "={{ $('Fetch 1 GLID').first().json.glid }}",
+        "contextWindowLength": 10
+      },
+      "id": "d1c87aa6-e619-4113-83d0-838f3291836e",
+      "name": "Postgres Chat Memory Gmail",
+      "type": "@n8n/n8n-nodes-langchain.memoryPostgresChat",
+      "typeVersion": 1.4,
+      "position": [
+        -2496,
+        160
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "2I0cCB2K4X2XhaK2",
+          "name": "Postgres account 3"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ {\n  \"status\": \"processing\",\n  \"glid\": $('Fetch 1 GLID').first().json.glid,\n  \"company_name\": $('Fetch 1 GLID').first().json.company_name,\n  \"email\": $('Fetch 1 GLID').first().json.email,\n  \"city\": $('Fetch 1 GLID').first().json.city,\n  \"mobile\": $('Fetch 1 GLID').first().json.mobile,\n  \"channel\": $('Parse Classifier Output').item.json.channel,\n  \"reasoning\": $('Parse Classifier Output').item.json.reasoning,\n  \"generated_pitch\": $json.text\n} }}",
+        "options": {}
+      },
+      "id": "f1051496-651d-4414-88fa-93df7d83a45b",
+      "name": "Respond With Pitch Voice",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        -2192,
+        -1040
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ {\n  \"status\": \"processing\",\n  \"glid\": $('Fetch 1 GLID').first().json.glid,\n  \"company_name\": $('Fetch 1 GLID').first().json.company_name,\n  \"email\": $('Fetch 1 GLID').first().json.email,\n  \"city\": $('Fetch 1 GLID').first().json.city,\n  \"mobile\": $('Fetch 1 GLID').first().json.mobile,\n  \"channel\": $('Parse Classifier Output').item.json.channel,\n  \"reasoning\": $('Parse Classifier Output').item.json.reasoning,\n  \"generated_pitch\": $json.text\n} }}",
+        "options": {}
+      },
+      "id": "2caacb85-107a-45a7-9ab3-1f2d38da6b6c",
+      "name": "Respond With Pitch WA",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        -2192,
+        -640
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ {\n  \"status\": \"processing\",\n  \"glid\": $('Fetch 1 GLID').first().json.glid,\n  \"company_name\": $('Fetch 1 GLID').first().json.company_name,\n  \"email\": $('Fetch 1 GLID').first().json.email,\n  \"city\": $('Fetch 1 GLID').first().json.city,\n  \"mobile\": $('Fetch 1 GLID').first().json.mobile,\n  \"channel\": $('Parse Classifier Output').item.json.channel,\n  \"reasoning\": $('Parse Classifier Output').item.json.reasoning,\n  \"generated_pitch\": $json.text\n} }}",
+        "options": {}
+      },
+      "id": "0f4a423b-faef-4e05-97b4-95b6a34d8ee6",
+      "name": "Respond With Pitch Gmail",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        -2192,
+        -240
+      ]
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "execute-dispatch",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "0546a596-2864-455f-92e0-80fa534a9813",
+      "name": "Execute Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [
+        -384,
+        -640
+      ],
+      "webhookId": "execute-webhook-123"
+    },
+    {
+      "parameters": {
+        "keepOnlySet": true,
+        "values": {
+          "string": [
+            {
+              "name": "glid",
+              "value": "={{ $json.body.glid }}"
+            },
+            {
+              "name": "mobile",
+              "value": "={{ $json.body.mobile }}"
+            },
+            {
+              "name": "email",
+              "value": "={{ $json.body.email }}"
+            },
+            {
+              "name": "channel",
+              "value": "={{ $json.body.channel.toLowerCase() }}"
+            },
+            {
+              "name": "message",
+              "value": "={{ $json.body.message }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "7a07f666-77c6-4f5c-b0bf-0edc925ad440",
+      "name": "Prepare Manual Payload",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 1,
+      "position": [
+        -96,
+        -640
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { \"status\": \"dispatched\", \"glid\": $json.body.glid, \"channel\": $json.body.channel } }}",
+        "options": {}
+      },
+      "id": "respond-execute-manual-001",
+      "name": "Respond Execute",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        -300,
+        -640
+      ]
+    },
+    {
+      "parameters": {
+        "amount": 6,
+        "unit": "seconds"
+      },
+      "id": "manual-iframe-wait-uuid-001",
+      "name": "Wait for Iframe Manual",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1,
+      "position": [
+        912,
+        -1040
+      ],
+      "webhookId": "manual-iframe-wait-uuid-001"
+    },
+    {
+      "parameters": {
+        "dataType": "string",
+        "value1": "={{ $json.channel.toLowerCase() }}",
+        "rules": {
+          "rules": [
+            {
+              "operation": "contains",
+              "value2": "voice"
+            },
+            {
+              "operation": "contains",
+              "value2": "whatsapp",
+              "output": 1
+            },
+            {
+              "operation": "contains",
+              "value2": "mail",
+              "output": 2
+            }
+          ]
+        },
+        "fallbackOutput": 0
+      },
+      "id": "9c997b11-a015-4767-9381-efe03120a779",
+      "name": "Switch Execute Channel",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 1,
+      "position": [
+        208,
+        -640
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO glid_conversations (glid, phone_number, direction, sender_type, channel, message_text)\nVALUES (\n  '{{ $json.glid }}',\n  '{{ $json.mobile }}',\n  'outbound',\n  'bot',\n  'voice',\n  '{{ $json.message.replace(/'/g, \"''\") }}'\n)\nRETURNING glid, phone_number AS mobile, message_text AS message",
+        "options": {}
+      },
+      "id": "c34d68bd-0230-44db-9c14-16d7a56c1ac5",
+      "name": "Store Outbound Msg Voice",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        512,
+        -1040
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "2I0cCB2K4X2XhaK2",
+          "name": "Postgres account 3"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT json_build_object('profile', (SELECT row_to_json(g) FROM glid_data g WHERE g.glid = '{{ $json.glid }}'), 'conversations', (SELECT json_agg(c) FROM (SELECT message_text, direction, channel, created_at, summary, sentiment FROM glid_conversations WHERE glid = '{{ $json.glid }}' ORDER BY created_at DESC LIMIT 5) c), 'current_pitch', '{{ $json.message.replace(/'/g, \"''\") }}') as history_data;",
+        "options": {}
+      },
+      "id": "78ae776b-7de4-4ba5-abfd-b8093ea5b4e5",
+      "name": "Fetch History Voice",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        816,
+        -1040
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "2I0cCB2K4X2XhaK2",
+          "name": "Postgres account 3"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://pipecat_voice_agent:8081/api/trigger_call",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ { speech: $('Store Outbound Msg Voice').first().json.message, knowledge: JSON.stringify($('Fetch History Voice').item.json.history_data) } }}",
+        "options": {
+          "timeout": 300000
+        }
+      },
+      "id": "cc954296-175c-4475-8c5b-c9a7a3fb97e1",
+      "name": "Trigger Pipecat Voicebot",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 3,
+      "position": [
+        1104,
+        -1040
+      ]
+    },
+    {
+      "parameters": {
+        "amount": 30,
+        "unit": "seconds"
+      },
+      "id": "67e4a10e-f749-40b7-b671-4599ea9d3644",
+      "name": "Wait Voice",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1,
+      "position": [
+        1408,
+        -1040
+      ],
+      "webhookId": "c7d8e9f0-a1b2-3456-cdef-789012345678"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO glid_conversations (glid, phone_number, direction, sender_type, channel, message_text, summary, sentiment)\nVALUES (\n  '{{ $('Store Outbound Msg Voice').first().json.glid }}',\n  '{{ $('Store Outbound Msg Voice').first().json.mobile }}',\n  'outbound', 'bot', 'voice',\n  '{{ $json.transcript.replace(/'/g, \"''\") }}',\n  '{{ $json.summary.replace(/'/g, \"''\") }}',\n  '{{ $json.sentiment }}'\n)",
+        "options": {}
+      },
+      "id": "50723d01-9bb0-4d4f-8978-6481d2f527ba",
+      "name": "Save Call Results Voice",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        1712,
+        -1040
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "2I0cCB2K4X2XhaK2",
+          "name": "Postgres account 3"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE glid_data SET sales_channel = 'outbound_sent', last_contacted = CURRENT_TIMESTAMP WHERE glid = '{{ $('Store Outbound Msg Voice').first().json.glid }}'",
+        "options": {}
+      },
+      "id": "eb7ee74e-436f-4fa3-9b29-b081e2c8ad1a",
+      "name": "Mark as Sent Voice",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        2016,
+        -1040
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "2I0cCB2K4X2XhaK2",
+          "name": "Postgres account 3"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO glid_conversations (glid, phone_number, direction, sender_type, channel, message_text, summary, sentiment)\nVALUES (\n  '{{ $json.glid }}',\n  '{{ $json.mobile }}',\n  'outbound', 'bot', 'whatsapp',\n  '{{ $json.message.replace(/'/g, \"''\") }}',\n  'Outbound WhatsApp message sent. Waiting for response.',\n  'Neutral'\n)\nRETURNING glid, phone_number AS mobile, message_text AS message",
+        "options": {}
+      },
+      "id": "a84ffacc-700f-4817-9a2f-d8d7b45a039b",
+      "name": "Store Outbound Msg WA",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        512,
+        -640
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "2I0cCB2K4X2XhaK2",
+          "name": "Postgres account 3"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "resource": "messages-api",
+        "instanceName": "mywhatsapp",
+        "remoteJid": "={{ ($json.mobile.toString().replace(/^\\+/, '').replace(/^(?!91)/, '91')) + '@s.whatsapp.net' }}",
+        "messageText": "={{ $json.message }}",
+        "options_message": {}
+      },
+      "id": "12954ff2-42e3-46b7-bb06-d37928feb3d5",
+      "name": "Send Text WA",
+      "type": "n8n-nodes-evolution-api.evolutionApi",
+      "typeVersion": 1,
+      "position": [
+        816,
+        -640
+      ],
+      "credentials": {
+        "evolutionApi": {
+          "id": "gibIMcYG409YvFeW",
+          "name": "Evolution account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE glid_data SET sales_channel = 'outbound_sent', last_contacted = CURRENT_TIMESTAMP WHERE glid = '{{ $('Store Outbound Msg WA').first().json.glid }}'",
+        "options": {}
+      },
+      "id": "722743ce-a7c4-4e12-b278-9d60bf4f22ea",
+      "name": "Mark as Sent WA",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        1104,
+        -640
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "2I0cCB2K4X2XhaK2",
+          "name": "Postgres account 3"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO glid_conversations (glid, phone_number, direction, sender_type, channel, message_text, summary, sentiment)\nVALUES (\n  '{{ $json.glid }}',\n  '{{ $json.email }}',\n  'outbound', 'bot', 'email',\n  '{{ $json.message.replace(/'/g, \"''\") }}',\n  'Outbound email sent. Waiting for response.',\n  'Neutral'\n)\nRETURNING glid, phone_number AS mobile, message_text AS message",
+        "options": {}
+      },
+      "id": "8e328e41-d251-48d9-9510-87d43d496107",
+      "name": "Store Outbound Msg Gmail",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        960,
+        -256
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "2I0cCB2K4X2XhaK2",
+          "name": "Postgres account 3"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "fromEmail": "garvit.sharma8@gmail.com",
+        "toEmail": "={{ $json.email }}",
+        "subject": "IndiaMart - Exclusive Opportunity for Your Business",
+        "options": {}
+      },
+      "id": "e0d387de-ba76-4d53-93a4-26071f9cf69a",
+      "name": "Send an Email",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [
+        1264,
+        -256
+      ],
+      "webhookId": "63628cf7-a2a0-48d3-9143-9551cf2da4de",
+      "credentials": {
+        "smtp": {
+          "id": "sqzGL2hYHWECGr7i",
+          "name": "SMTP account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE glid_data SET sales_channel = 'outbound_sent', last_contacted = CURRENT_TIMESTAMP WHERE glid = '{{ $('Store Outbound Msg Gmail').first().json.glid }}'",
+        "options": {}
+      },
+      "id": "7096f650-d617-43bc-98b2-27b6f5128fc3",
+      "name": "Mark as Sent Gmail",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        1552,
+        -256
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "2I0cCB2K4X2XhaK2",
+          "name": "Postgres account 3"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "64df83c1-ee2e-45b2-ac8c-28ff7b747ef2",
+              "leftValue": "={{ $json.email }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "exists",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        208,
+        -304
+      ],
+      "id": "0b656a5f-700f-4bfe-ae05-c730ac3d8307",
+      "name": "If"
+    },
+    {
+      "parameters": {
+        "resource": "messages-api",
+        "instanceName": "mywhatsapp",
+        "remoteJid": "={{ ($json.mobile.toString().replace(/^\\+/, '').replace(/^(?!91)/, '91')) + '@s.whatsapp.net' }}",
+        "messageText": "=Please enter the email for the information to be sent",
+        "options_message": {}
+      },
+      "id": "3f4afc61-d8b6-4cc8-9760-522f109deea9",
+      "name": "Send Text WA1",
+      "type": "n8n-nodes-evolution-api.evolutionApi",
+      "typeVersion": 1,
+      "position": [
+        144,
+        0
+      ],
+      "credentials": {
+        "evolutionApi": {
+          "id": "gibIMcYG409YvFeW",
+          "name": "Evolution account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE glid_data SET sales_channel = 'outbound_sent', last_contacted = CURRENT_TIMESTAMP WHERE glid = '{{ $('Store Outbound Msg WA').first().json.glid }}'",
+        "options": {}
+      },
+      "id": "a8fb7ecd-28b8-48a4-aaf1-854c16e210c2",
+      "name": "Mark as Sent WA1",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        432,
+        0
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "2I0cCB2K4X2XhaK2",
+          "name": "Postgres account 3"
+        }
+      }
+    },
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        640,
+        0
+      ],
+      "id": "b82d80cd-e8bb-4b5b-9982-cb5cbcdd3654",
+      "name": "Wait",
+      "webhookId": "196cda5e-e43c-4d7d-ae42-b26c2b1ae34b"
+    }
+  ],
+  "connections": {
+    "Webhook Phase 1": {
+      "main": [
+        [
+          {
+            "node": "Fetch 1 GLID",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch 1 GLID": {
+      "main": [
+        [
+          {
+            "node": "Check if GLID found",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check if GLID found": {
+      "main": [
+        [
+          {
+            "node": "Fetch Past Conversations",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respond Empty",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Past Conversations": {
+      "main": [
+        [
+          {
+            "node": "Classify Conversation Mode",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Classify Conversation Mode": {
+      "main": [
+        [
+          {
+            "node": "Parse Classifier Output",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenAI Chat Model Classifier": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Classify Conversation Mode",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Classifier Output": {
+      "main": [
+        [
+          {
+            "node": "Save Preferred Mode",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Save Preferred Mode": {
+      "main": [
+        [
+          {
+            "node": "Switch on Channel",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Switch on Channel": {
+      "main": [
+        [
+          {
+            "node": "Generate Sales Pitch Voice",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Generate Sales Pitch WA",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Generate Sales Pitch Gmail",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Generate Sales Pitch Voice": {
+      "main": [
+        [
+          {
+            "node": "Respond With Pitch Voice",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenAI Chat Model Pitch Voice": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Generate Sales Pitch Voice",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Generate Sales Pitch WA": {
+      "main": [
+        [
+          {
+            "node": "Respond With Pitch WA",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenAI Chat Model Pitch WA": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Generate Sales Pitch WA",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Generate Sales Pitch Gmail": {
+      "main": [
+        [
+          {
+            "node": "Respond With Pitch Gmail",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenAI Chat Model Pitch Gmail": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Generate Sales Pitch Gmail",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Execute Webhook": {
+      "main": [
+        [
+          {
+            "node": "Respond Execute",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Respond Execute": {
+      "main": [
+        [
+          {
+            "node": "Prepare Manual Payload",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Manual Payload": {
+      "main": [
+        [
+          {
+            "node": "Switch Execute Channel",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Switch Execute Channel": {
+      "main": [
+        [
+          {
+            "node": "Store Outbound Msg Voice",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Store Outbound Msg WA",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "If",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Store Outbound Msg Voice": {
+      "main": [
+        [
+          {
+            "node": "Fetch History Voice",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch History Voice": {
+      "main": [
+        [
+          {
+            "node": "Trigger Pipecat Voicebot",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Trigger Pipecat Voicebot": {
+      "main": [
+        [
+          {
+            "node": "Wait Voice",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait Voice": {
+      "main": [
+        [
+          {
+            "node": "Save Call Results Voice",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Save Call Results Voice": {
+      "main": [
+        [
+          {
+            "node": "Mark as Sent Voice",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Store Outbound Msg WA": {
+      "main": [
+        [
+          {
+            "node": "Send Text WA",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Text WA": {
+      "main": [
+        [
+          {
+            "node": "Mark as Sent WA",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Store Outbound Msg Gmail": {
+      "main": [
+        [
+          {
+            "node": "Send an Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send an Email": {
+      "main": [
+        [
+          {
+            "node": "Mark as Sent Gmail",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "If": {
+      "main": [
+        [
+          {
+            "node": "Store Outbound Msg Gmail",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Send Text WA1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Text WA1": {
+      "main": [
+        [
+          {
+            "node": "Mark as Sent WA1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Mark as Sent WA1": {
+      "main": [
+        [
+          {
+            "node": "Wait",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait": {
+      "main": [
+        [
+          {
+            "node": "Store Outbound Msg Gmail",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {
+    "Execute Webhook": [
+      {
+        "headers": {
+          "host": "localhost:5678",
+          "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:151.0) Gecko/20100101 Firefox/151.0",
+          "accept": "*/*",
+          "accept-language": "en-US,en;q=0.9",
+          "accept-encoding": "gzip, deflate, br, zstd",
+          "content-type": "application/json",
+          "content-length": "772",
+          "origin": "null",
+          "connection": "keep-alive",
+          "sec-fetch-dest": "empty",
+          "sec-fetch-mode": "cors",
+          "sec-fetch-site": "cross-site",
+          "priority": "u=4"
+        },
+        "params": {},
+        "query": {},
+        "body": {
+          "glid": "1162370",
+          "channel": "gmail",
+          "message": "Subject: Follow-Up on Our Recent Meeting\n\nDear Ms. Mishra,\n\nI hope this message finds you well. It was a pleasure discussing your needs with Mr. Kashyap during our recent meeting. I understand that he plans to wind down operations by the next financial year, and we at IndiaMart are here to support you during this transition.\n\nGiven your involvement in the packaging industry, I’d love to explore how IndiaMart can assist you in finding solutions that align with your future plans. \n\nWould it be possible for us to schedule a follow-up conversation to discuss this further?\n\nLooking forward to hearing from you.\n\nBest regards,  \n[Your Name]  \n[Your Position]  \nIndiaMart",
+          "mobile": "9987669414",
+          "email": null
+        },
+        "webhookUrl": "http://n8n:5678/webhook/execute-dispatch",
+        "executionMode": "production"
+      }
+    ]
+  },
+  "meta": {
+    "instanceId": "b3a8e0e1f9ab1bfe3a36f231f676f78bb30a519d2b21e6c530c0eee8ebb4a5d0"
+  }
+}

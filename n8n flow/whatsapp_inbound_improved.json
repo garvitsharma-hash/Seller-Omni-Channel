@@ -1,0 +1,557 @@
+{
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "buddy23",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        -4064,
+        2496
+      ],
+      "id": "6998a101-37a9-4d78-9fec-ad470285e1db",
+      "name": "Webhook1",
+      "webhookId": "ad413971-4a21-4d13-b5c3-ec0fa5815938"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT COALESCE(json_agg(c), '[]'::json) as recent_history FROM (SELECT message_text, direction, channel, created_at, summary, sentiment FROM glid_conversations WHERE glid = '{{ $('Lookup GLID by Phone2').first().json.glid }}' ORDER BY created_at DESC ) c;",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        -2672,
+        2576
+      ],
+      "id": "e22495aa-7cf6-4103-b36d-f123805325d0",
+      "name": "Fetch Past Conversations1",
+      "credentials": {
+        "postgres": {
+          "id": "2I0cCB2K4X2XhaK2",
+          "name": "Postgres account 3"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "98ac7b31-bee0-421b-a172-34709427d28e",
+              "leftValue": "={{ $json.body.data.key.fromMe }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        -3824,
+        2496
+      ],
+      "id": "09386f7a-5508-485f-bb6e-caa30d6e1862",
+      "name": "If fromMe2"
+    },
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        -3584,
+        2336
+      ],
+      "id": "6f79ba50-6486-4a44-bb91-c6b751741579",
+      "name": "No Operation, do nothing2"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Extract clean phone number from remoteJid\nconst remoteJid = $('Webhook1').first().json.body.data.key.remoteJid;\nconst phone = remoteJid.replace('@s.whatsapp.net', '').replace('@g.us', '');\n\n// Strip leading 91 for Indian numbers to match glid_data.mobile\nconst phoneClean = phone.startsWith('91') && phone.length > 10 ? phone.substring(2) : phone;\n\nconst message = $('Webhook1').first().json.body.data.message.conversation \n  || $('Webhook1').first().json.body.data.message.extendedTextMessage?.text \n  || '';\n\n// EXTRACT EMAIL LOGIC ADDED HERE\nconst emailRegex = /([a-zA-Z0-9._-]+@[a-zA-Z0-9._-]+\\.[a-zA-Z0-9_-]+)/;\nconst match = message.match(emailRegex);\nconst email = match ? match[0] : null;\n\nreturn [{\n  json: {\n    phone_full: phone,\n    phone_clean: phoneClean,\n    remote_jid: remoteJid,\n    instance: $('Webhook1').first().json.body.instance,\n    message: message,\n    email: email\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -3584,
+        2656
+      ],
+      "id": "0db7da7d-7443-4240-845f-55f11128dd53",
+      "name": "Extract Phone & Message2"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT glid, company_name, contact_person_name, industry_category, sub_industry_category, city, nature_of_business, trigger_hot_lead_type, hl_type, product_count, profile_score, prime_status, enquiries_90d, pns_received_90d, meetings_90d, active_bl, meeting_updates_1yr, activity_titles_30d_unique, preferred_language, mobile FROM glid_data WHERE mobile = '{{ $json.phone_clean }}' OR mobile = '{{ $json.phone_full }}' OR mobile LIKE '%{{ $json.phone_clean }}' LIMIT 1",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        -3344,
+        2656
+      ],
+      "id": "5a477a36-7726-4857-a205-0f13b3f4dcbd",
+      "name": "Lookup GLID by Phone2",
+      "credentials": {
+        "postgres": {
+          "id": "2I0cCB2K4X2XhaK2",
+          "name": "Postgres account 3"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "check-glid-found",
+              "leftValue": "={{ $json.glid }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "exists",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        -3104,
+        2656
+      ],
+      "id": "c26f567d-666d-422f-878d-03d18eaae288",
+      "name": "GLID Found?2"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO glid_conversations (glid, phone_number, direction, sender_type, channel, message_text) VALUES ('{{ $('Lookup GLID by Phone2').first().json.glid }}', '{{ $('Extract Phone & Message2').first().json.phone_full }}', 'inbound', 'customer', 'whatsapp', '{{ $('Extract Phone & Message2').first().json.message.replace(/'/g, \"''\") }}')",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        -2864,
+        2576
+      ],
+      "id": "e849748a-a3ae-4f1d-a1af-9c65d7579354",
+      "name": "Store Inbound Msg2",
+      "credentials": {
+        "postgres": {
+          "id": "2I0cCB2K4X2XhaK2",
+          "name": "Postgres account 3"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=Current Server Date & Time: {{ $now }}\n\n\nCustomer message: {{ $('Extract Phone & Message2').first().json.message }}\n\nLead context (from database):\n- GLID: {{ $('Lookup GLID by Phone2').first().json.glid }}\n- Company: {{ $('Lookup GLID by Phone2').first().json.company_name }}\n- Contact: {{ $('Lookup GLID by Phone2').first().json.contact_person_name }}\n- Industry: {{ $('Lookup GLID by Phone2').first().json.industry_category }}\n- Sub-Industry: {{ $('Lookup GLID by Phone2').first().json.sub_industry_category }}\n- City: {{ $('Lookup GLID by Phone2').first().json.city }}\n- Nature of Business: {{ $('Lookup GLID by Phone2').first().json.nature_of_business }}\n- Hot Lead Type: {{ $('Lookup GLID by Phone2').first().json.trigger_hot_lead_type }}\n- Product Count: {{ $('Lookup GLID by Phone2').first().json.product_count }}\n- Profile Score: {{ $('Lookup GLID by Phone2').first().json.profile_score }}\n- Prime Status: {{ $('Lookup GLID by Phone2').first().json.prime_status }}\n- Enquiries (90D): {{ $('Lookup GLID by Phone2').first().json.enquiries_90d }}\n- Meetings (90D): {{ $('Lookup GLID by Phone2').first().json.meetings_90d }}\n- Previous Meeting: {{ $('Lookup GLID by Phone2').first().json.meeting_updates_1yr }}\n- Preferred Language: {{ $('Lookup GLID by Phone2').first().json.preferred_language }}\n-If previous language not mentioned then hinglish but the script should be english\n\nRecent Conversation History (Voice & WhatsApp):\n{{ JSON.stringify($('Fetch Past Conversations1').first().json.recent_history, null, 2) }}",
+        "options": {
+          "systemMessage": "You are a helpful IndiaMart sales assistant continuing a WhatsApp conversation with a business lead. You have their full lead data and conversation history via memory.\n\nRules:\n- Keep replies friendly, professional, and short (1-2 sentences max)\n- Reference their company naturally\n- Address their question/concern directly\n- If they ask about past conversations, dates, or context, refer to the 'Recent Conversation History' provided to you to answer accurately.\n- If they show interest, guide toward a meeting or next step\n- If they ask pricing or product questions, be helpful and specific\n- Do NOT use markdown or bold - write plain text only\n- Use language matching their preferred language or city-based language (hinglish for north india, tamil+english for chennai, etc)\n- If they seem uninterested, be respectful and leave the door open"
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 3.1,
+      "position": [
+        -2464,
+        2576
+      ],
+      "id": "92f36b4e-8fa0-4a18-989c-acb0341d7385",
+      "name": "AI Agent Reply2"
+    },
+    {
+      "parameters": {
+        "model": {
+          "__rl": true,
+          "value": "openai/gpt-4.1",
+          "mode": "list",
+          "cachedResultName": "openai/gpt-4.1"
+        },
+        "builtInTools": {},
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1.3,
+      "position": [
+        -2544,
+        2816
+      ],
+      "id": "69ac377d-90ab-47f7-96e6-7c5e61169a50",
+      "name": "OpenAI Chat Model2",
+      "credentials": {
+        "openAiApi": {
+          "id": "O0szAJGMtGNeoYkg",
+          "name": "OpenAI account 3"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO glid_conversations (glid, phone_number, direction, sender_type, channel, message_text) VALUES ('{{ $('Lookup GLID by Phone2').first().json.glid }}', '{{ $('Extract Phone & Message2').first().json.phone_full }}', 'outbound', 'bot', 'whatsapp', '{{ ($json.output).replace(/'/g, \"''\") }}')",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        -2208,
+        2592
+      ],
+      "id": "372e447f-223c-45c7-86a6-d08859c815d2",
+      "name": "Store Bot Reply2",
+      "credentials": {
+        "postgres": {
+          "id": "2I0cCB2K4X2XhaK2",
+          "name": "Postgres account 3"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "resource": "messages-api",
+        "instanceName": "={{ $('Extract Phone & Message2').first().json.instance }}",
+        "remoteJid": "={{ $('Extract Phone & Message2').first().json.remote_jid }}",
+        "messageText": "={{ $('AI Agent Reply2').first().json.output }}",
+        "options_message": {}
+      },
+      "type": "n8n-nodes-evolution-api.evolutionApi",
+      "typeVersion": 1,
+      "position": [
+        -2064,
+        2576
+      ],
+      "id": "df1d0961-240e-4971-8a79-bf765c6fbdd6",
+      "name": "Send Reply2",
+      "credentials": {
+        "evolutionApi": {
+          "id": "gibIMcYG409YvFeW",
+          "name": "Evolution account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE glid_data SET sales_channel = 'reply_received' WHERE glid = '{{ $('Lookup GLID by Phone2').first().json.glid }}'",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        -1872,
+        2576
+      ],
+      "id": "db94b824-56ad-46c5-adcc-d9c270dbd389",
+      "name": "Update Status to Reply Received2",
+      "credentials": {
+        "postgres": {
+          "id": "2I0cCB2K4X2XhaK2",
+          "name": "Postgres account 3"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO glid_conversations (glid, phone_number, direction, sender_type, channel, message_text) VALUES ('UNKNOWN', '{{ $('Extract Phone & Message1').first().json.phone_full }}', 'inbound', 'customer', 'whatsapp', {{ $toJson($('Extract Phone & Message1').first().json.message) }})",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        -3056,
+        2880
+      ],
+      "id": "e0d39cdc-83c0-48af-bdfe-c01b17bac169",
+      "name": "Store Unknown Sender Msg2",
+      "credentials": {
+        "postgres": {
+          "id": "2I0cCB2K4X2XhaK2",
+          "name": "Postgres account 3"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "sessionIdType": "customKey",
+        "sessionKey": "={{ $('Lookup GLID by Phone2').first().json.glid }}",
+        "contextWindowLength": 10
+      },
+      "type": "@n8n/n8n-nodes-langchain.memoryPostgresChat",
+      "typeVersion": 1.4,
+      "position": [
+        -2384,
+        2816
+      ],
+      "id": "855315a0-92ea-4f0a-839e-b93ec63cee6f",
+      "name": "Postgres Chat Memory4",
+      "credentials": {
+        "postgres": {
+          "id": "2I0cCB2K4X2XhaK2",
+          "name": "Postgres account 3"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "check-email",
+              "leftValue": "={{ $('Extract Phone & Message2').first().json.email }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "exists",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        -3000,
+        2400
+      ],
+      "id": "bfb7c84f-4840-4abb-929e-b6cfc4ad5056",
+      "name": "Check Email Provided"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE glid_data SET email = '{{ $('Extract Phone & Message2').first().json.email }}' WHERE glid = '{{ $('Lookup GLID by Phone2').first().json.glid }}'",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        -2800,
+        2300
+      ],
+      "id": "ce8b2f22-0213-4553-aee6-3edc9721b441",
+      "name": "Update Email in Database",
+      "credentials": {
+        "postgres": {
+          "id": "2I0cCB2K4X2XhaK2",
+          "name": "Postgres account 3"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Webhook1": {
+      "main": [
+        [
+          {
+            "node": "If fromMe2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Past Conversations1": {
+      "main": [
+        [
+          {
+            "node": "AI Agent Reply2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "If fromMe2": {
+      "main": [
+        [
+          {
+            "node": "No Operation, do nothing2",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Extract Phone & Message2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract Phone & Message2": {
+      "main": [
+        [
+          {
+            "node": "Lookup GLID by Phone2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Lookup GLID by Phone2": {
+      "main": [
+        [
+          {
+            "node": "GLID Found?2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "GLID Found?2": {
+      "main": [
+        [
+          {
+            "node": "Check Email Provided",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Store Unknown Sender Msg2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Store Inbound Msg2": {
+      "main": [
+        [
+          {
+            "node": "Fetch Past Conversations1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Agent Reply2": {
+      "main": [
+        [
+          {
+            "node": "Store Bot Reply2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenAI Chat Model2": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "AI Agent Reply2",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Store Bot Reply2": {
+      "main": [
+        [
+          {
+            "node": "Send Reply2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Reply2": {
+      "main": [
+        [
+          {
+            "node": "Update Status to Reply Received2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Postgres Chat Memory4": {
+      "ai_memory": [
+        [
+          {
+            "node": "AI Agent Reply2",
+            "type": "ai_memory",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Email Provided": {
+      "main": [
+        [
+          {
+            "node": "Update Email in Database",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Store Inbound Msg2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update Email in Database": {
+      "main": [
+        [
+          {
+            "node": "Store Inbound Msg2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  }
+}
